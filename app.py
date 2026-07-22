@@ -114,8 +114,7 @@ def render_calorie_visual(meals_subset):
     ax.barh(short, [max_bar]*len(short), color="#2a2a2e", height=0.55, zorder=1)
     bars = ax.barh(short, kcals, color=colours, height=0.55, zorder=2)
     ax.axvline(700, color="#fbfbff", linewidth=1.2, linestyle="--", alpha=0.6, zorder=3)
-    ax.text(708, len(df)-0.4, "Target
-700 kcal", color="#909094", fontsize=7.5, va="top")
+    ax.text(708, len(df)-0.4, "Target 700 kcal", color="#909094", fontsize=7.5, va="top")
     for bar_, kcal in zip(bars, kcals):
         ax.text(bar_.get_width()+10, bar_.get_y()+bar_.get_height()/2,
                 f"{kcal:.0f} kcal", va="center", color="#fbfbff", fontsize=8.5, fontweight="bold")
