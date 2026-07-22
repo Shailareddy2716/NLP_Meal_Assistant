@@ -56,6 +56,9 @@ MEALS = {
     ],
 }
 
+MEAL_NAMES = list(MEALS.keys())
+DAILY_TARGET = 2000  # kcal
+
 def get_macros(meal_name):
     totals = dict(calories_kcal=0.0, protein_g=0.0, fat_g=0.0,
                   sat_fat_g=0.0, fiber_g=0.0, carbs_g=0.0)
@@ -91,52 +94,35 @@ def build_meal_scores():
 
 meal_scores = build_meal_scores()
 
-# ─── Calorie visual ───────────────────────────────────────────────────────────
-CALORIE_TARGET = 700   # kcal per meal target
-
-def calorie_colour(kcal):
-    pct = kcal / CALORIE_TARGET
-    if pct <= 0.75:  return "#17b26a"   # green  — under 75 %
-    elif pct <= 1.0: return "#ffd400"   # yellow — 75–100 %
-    else:            return "#f04438"   # red    — over target
+# ─── Calorie colour helper ────────────────────────────────────────────────────
+def calorie_colour_meal(kcal, target=700):
+    pct = kcal / target
+    if pct <= 0.75:  return "#17b26a"
+    elif pct <= 1.0: return "#ffd400"
+    else:            return "#f04438"
 
 def render_calorie_visual(meals_subset):
-    """Render an inline calorie gauge chart for the given meals."""
     df = meal_scores[meal_scores["meal"].isin(meals_subset)].sort_values(
             "calories_kcal", ascending=True)
-
     fig, ax = plt.subplots(figsize=(6, max(2.5, 0.7 * len(df))))
     fig.patch.set_facecolor("#1D1D20")
     ax.set_facecolor("#1D1D20")
-
-    short = [m.split("+")[0].strip()[:22] for m in df["meal"]]
-    kcals = df["calories_kcal"].tolist()
-    colours = [calorie_colour(k) for k in kcals]
-
-    # Grey background bars (full target width = CALORIE_TARGET * 1.5)
-    max_bar = max(max(kcals) * 1.15, CALORIE_TARGET * 1.1)
+    short  = [m.split("+")[0].strip()[:22] for m in df["meal"]]
+    kcals  = df["calories_kcal"].tolist()
+    colours = [calorie_colour_meal(k) for k in kcals]
+    max_bar = max(max(kcals) * 1.15, 700 * 1.1)
     ax.barh(short, [max_bar]*len(short), color="#2a2a2e", height=0.55, zorder=1)
-    # Actual calorie bars
     bars = ax.barh(short, kcals, color=colours, height=0.55, zorder=2)
-    # Target line
-    ax.axvline(CALORIE_TARGET, color="#fbfbff", linewidth=1.2,
-               linestyle="--", alpha=0.6, zorder=3)
-    ax.text(CALORIE_TARGET + 8, len(df) - 0.4, f"Target\n{CALORIE_TARGET} kcal",
-            color="#909094", fontsize=7.5, va="top")
-
-    # Labels on bars
+    ax.axvline(700, color="#fbfbff", linewidth=1.2, linestyle="--", alpha=0.6, zorder=3)
+    ax.text(708, len(df)-0.4, "Target
+700 kcal", color="#909094", fontsize=7.5, va="top")
     for bar_, kcal in zip(bars, kcals):
-        ax.text(bar_.get_width() + 10, bar_.get_y() + bar_.get_height()/2,
-                f"{kcal:.0f} kcal", va="center", color="#fbfbff", fontsize=8.5,
-                fontweight="bold")
-
-    ax.set_xlim(0, max_bar * 1.18)
+        ax.text(bar_.get_width()+10, bar_.get_y()+bar_.get_height()/2,
+                f"{kcal:.0f} kcal", va="center", color="#fbfbff", fontsize=8.5, fontweight="bold")
+    ax.set_xlim(0, max_bar*1.18)
     ax.set_xlabel("Calories (kcal)", color="#909094", fontsize=9)
     ax.tick_params(colors="#fbfbff", labelsize=8.5)
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    # Legend
+    for spine in ax.spines.values(): spine.set_visible(False)
     patches = [
         mpatches.Patch(color="#17b26a", label="Under target"),
         mpatches.Patch(color="#ffd400", label="Near target"),
@@ -144,10 +130,119 @@ def render_calorie_visual(meals_subset):
     ]
     ax.legend(handles=patches, loc="lower right", fontsize=7.5,
               facecolor="#1D1D20", edgecolor="#444", labelcolor="#fbfbff")
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+# ─── Daily tracker chart ─────────────────────────────────────────────────────
+def render_daily_tracker(slot_meals):
+    """
+    slot_meals: dict  {slot_name: meal_name or None}
+    Renders a stacked horizontal bar showing kcal per meal slot vs 2000 kcal daily target.
+    Below that, a donut gauge showing % of daily target consumed.
+    """
+    SLOT_COLOURS = {
+        "Breakfast": "#A1C9F4",
+        "Lunch":     "#8DE5A1",
+        "Dinner":    "#FFB482",
+        "Snack":     "#D0BBFF",
+    }
+    slots_with_meals = {s: m for s, m in slot_meals.items() if m}
+    if not slots_with_meals:
+        st.info("Select at least one meal above to see your daily tracker.")
+        return
+
+    slot_kcals   = {}
+    slot_protein = {}
+    slot_fibre   = {}
+    for slot, meal in slots_with_meals.items():
+        macros = get_macros(meal)
+        slot_kcals[slot]   = macros["calories_kcal"]
+        slot_protein[slot] = macros["protein_g"]
+        slot_fibre[slot]   = macros["fiber_g"]
+
+    total_kcal = sum(slot_kcals.values())
+    pct = min(total_kcal / DAILY_TARGET, 1.0)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.5),
+                                    gridspec_kw={"width_ratios": [2.5, 1]})
+    fig.patch.set_facecolor("#1D1D20")
+
+    # ── Left: stacked horizontal bar ─────────────────────────────────────────
+    ax1.set_facecolor("#1D1D20")
+    # background full-day track
+    ax1.barh(["Daily total"], [DAILY_TARGET * 1.25], color="#2a2a2e", height=0.5)
+
+    left = 0
+    for slot, kcal in slot_kcals.items():
+        colour = SLOT_COLOURS.get(slot, "#fbfbff")
+        bar = ax1.barh(["Daily total"], [kcal], left=left, color=colour,
+                       height=0.5, label=f"{slot}: {kcal:.0f} kcal")
+        # label inside bar if wide enough
+        if kcal > 80:
+            ax1.text(left + kcal/2, 0, f"{slot}
+{kcal:.0f}", ha="center",
+                     va="center", color="#1D1D20", fontsize=8, fontweight="bold")
+        left += kcal
+
+    # target line
+    ax1.axvline(DAILY_TARGET, color="#fbfbff", linewidth=1.5,
+                linestyle="--", alpha=0.7, zorder=5)
+    ax1.text(DAILY_TARGET + 15, 0.28, f"2000 kcal
+target",
+             color="#909094", fontsize=8, va="top")
+
+    # over-target indicator
+    if total_kcal > DAILY_TARGET:
+        ax1.axvline(total_kcal, color="#f04438", linewidth=1.5, alpha=0.8, zorder=6)
+        ax1.text(total_kcal + 15, -0.28,
+                 f"+{total_kcal - DAILY_TARGET:.0f} over",
+                 color="#f04438", fontsize=8, va="bottom")
+
+    ax1.set_xlim(0, max(DAILY_TARGET * 1.3, total_kcal * 1.15))
+    ax1.set_xlabel("Calories (kcal)", color="#909094", fontsize=9)
+    ax1.set_title("Calorie breakdown by meal slot", color="#fbfbff",
+                  fontsize=10, pad=8)
+    ax1.tick_params(colors="#fbfbff", labelsize=8.5)
+    for spine in ax1.spines.values(): spine.set_visible(False)
+    ax1.legend(loc="lower right", fontsize=7.5,
+               facecolor="#1D1D20", edgecolor="#444", labelcolor="#fbfbff")
+
+    # ── Right: donut gauge ────────────────────────────────────────────────────
+    ax2.set_facecolor("#1D1D20")
+    ax2.set_aspect("equal")
+
+    gauge_colour = ("#17b26a" if total_kcal <= DAILY_TARGET * 0.75 else
+                    "#ffd400" if total_kcal <= DAILY_TARGET else "#f04438")
+    sizes  = [pct, 1 - pct]
+    colours_donut = [gauge_colour, "#2a2a2e"]
+    wedges, _ = ax2.pie(sizes, colors=colours_donut, startangle=90,
+                        counterclock=False,
+                        wedgeprops=dict(width=0.38, edgecolor="#1D1D20"))
+    ax2.text(0, 0.08, f"{total_kcal:.0f}", ha="center", va="center",
+             color="#fbfbff", fontsize=16, fontweight="bold")
+    ax2.text(0, -0.22, "kcal today", ha="center", va="center",
+             color="#909094", fontsize=8)
+    pct_label = f"{total_kcal/DAILY_TARGET*100:.0f}% of daily goal"
+    ax2.text(0, -0.55, pct_label, ha="center", va="center",
+             color=gauge_colour, fontsize=8, fontweight="bold")
+    ax2.set_title("Daily gauge", color="#fbfbff", fontsize=10, pad=8)
 
     plt.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
+
+    # ── Macro summary row ─────────────────────────────────────────────────────
+    total_protein = sum(slot_protein.values())
+    total_fibre   = sum(slot_fibre.values())
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🔥 Total Calories", f"{total_kcal:.0f} kcal",
+              delta=f"{total_kcal - DAILY_TARGET:+.0f} vs target")
+    c2.metric("💪 Total Protein",  f"{total_protein:.1f} g",
+              delta="target ~140g" if total_protein < 140 else "✅ on track")
+    c3.metric("🌿 Total Fibre",    f"{total_fibre:.1f} g",
+              delta="target ~30g"  if total_fibre  < 30  else "✅ on track")
+
 
 # ─── NLP ──────────────────────────────────────────────────────────────────────
 INTENT_MAP = {
@@ -205,7 +300,6 @@ def ask(question, df=None):
     meals  = detect_meals(question)
     nut    = detect_nutrient(question)
 
-    # calorie intent → return special signal
     if intent == "calorie":
         target_meals = meals if meals else df["meal"].tolist()
         subset = df[df["meal"].isin(target_meals)].sort_values("calories_kcal", ascending=False)
@@ -215,28 +309,35 @@ def ask(question, df=None):
 
     if intent == "score":
         rows = (df[df["meal"].isin(meals)] if meals else df).sort_values("score", ascending=False)
-        return "**Meal scores:**\n" + "\n".join(f"- {r['band']} **{r['meal']}** — {r['score']}/100" for _,r in rows.iterrows()), None, []
+        return ("**Meal scores:**\n" +
+                "\n".join(f"- {r['band']} **{r['meal']}** — {r['score']}/100"
+                           for _,r in rows.iterrows()), None, [])
     elif intent == "best":
         r = df.loc[df["score"].idxmax()]
         return (f"🏆 **Healthiest:** {r['meal']} ({r['score']}/100)\n"
-                f"- Protein: {r['protein_g']}g | Fibre: {r['fiber_g']}g | Sat.fat: {r['sat_fat_g']}g | {r['calories_kcal']:.0f} kcal"), None, []
+                f"- Protein: {r['protein_g']}g | Fibre: {r['fiber_g']}g | "
+                f"Sat.fat: {r['sat_fat_g']}g | {r['calories_kcal']:.0f} kcal"), None, []
     elif intent == "worst":
         r = df.loc[df["score"].idxmin()]
         return (f"⚠️ **Least healthy:** {r['meal']} ({r['score']}/100)\n"
-                f"- {r['calories_kcal']:.0f} kcal | Sat.fat: {r['sat_fat_g']}g | Fibre only {r['fiber_g']}g"), None, []
+                f"- {r['calories_kcal']:.0f} kcal | Sat.fat: {r['sat_fat_g']}g | "
+                f"Fibre only {r['fiber_g']}g"), None, []
     elif intent == "compare":
         if len(meals) < 2:
             return "Mention two meals to compare — e.g. *compare chicken vs burger*.", None, []
         a,b = df[df["meal"]==meals[0]].iloc[0], df[df["meal"]==meals[1]].iloc[0]
         w = a if a["score"]>b["score"] else b
-        return (f"**Comparison:**\n- {a['meal']}: {a['score']}/100 | {a['calories_kcal']:.0f} kcal | {a['protein_g']}g protein\n"
-                f"- {b['meal']}: {b['score']}/100 | {b['calories_kcal']:.0f} kcal | {b['protein_g']}g protein\n"
+        return (f"**Comparison:**\n- {a['meal']}: {a['score']}/100 | "
+                f"{a['calories_kcal']:.0f} kcal | {a['protein_g']}g protein\n"
+                f"- {b['meal']}: {b['score']}/100 | {b['calories_kcal']:.0f} kcal | "
+                f"{b['protein_g']}g protein\n"
                 f"\n🏆 **Winner:** {w['meal']} by {abs(a['score']-b['score']):.1f} pts"), None, []
     elif intent == "macro" and nut:
         label, unit = NUTRIENT_LABELS[nut], NUTRIENT_UNITS[nut]
         rows = (df[df["meal"].isin(meals)] if meals else df).sort_values(nut, ascending=False)
         return (f"**{label.capitalize()} per meal:**\n" +
-                "\n".join(f"- {r['meal']}: {r[nut]}{unit}" for _,r in rows.iterrows())), None, []
+                "\n".join(f"- {r['meal']}: {r[nut]}{unit}"
+                           for _,r in rows.iterrows()), None, [])
     elif intent == "why":
         if not meals: return "Which meal? e.g. *why is the burger rated poorly?*", None, []
         r = df[df["meal"]==meals[0]].iloc[0]; reasons=[]
@@ -249,110 +350,148 @@ def ask(question, df=None):
     elif intent == "improve":
         if not meals: return "Which meal? e.g. *how can I improve the burger?*", None, []
         r = df[df["meal"]==meals[0]].iloc[0]; tips=[]
-        if r["fiber_g"]<5:         tips.append("add vegetables or legumes for fibre")
-        if r["protein_g"]<25:      tips.append("add lean protein — chicken, eggs, or legumes")
-        if r["sat_fat_g"]>5:       tips.append("cut butter, cheese, or fatty meat")
-        if r["calories_kcal"]>700: tips.append("reduce portions or swap high-calorie items")
-        if not tips: tips.append("already well balanced — keep it up!")
-        return (f"**Tips for {r['meal']}:**\n" +
-                "\n".join(f"- {t}" for t in tips)), None, []
+        if r["fiber_g"]<5:         tips.append("add a veg side for more fibre")
+        if r["protein_g"]<25:      tips.append("add lean protein (chicken, eggs, legumes)")
+        if r["sat_fat_g"]>5:       tips.append("swap fried/fatty items for grilled/steamed")
+        if r["calories_kcal"]>700: tips.append("reduce portion size or drop a high-cal item")
+        if not tips: tips.append("already a solid meal — maintain this balance")
+        return (f"**Improvements for {r['meal']}:**\n" +
+                "\n".join(f"• {t}" for t in tips)), None, []
     elif intent == "list":
         return ("**Available meals:**\n" +
                 "\n".join(f"{i+1}. {r['meal']} ({r['score']}/100)"
-                           for i,(_,r) in enumerate(df.sort_values("score",ascending=False).iterrows()))), None, []
-    elif nut:
-        label, unit = NUTRIENT_LABELS[nut], NUTRIENT_UNITS[nut]
-        rows = df.sort_values(nut, ascending=False)
-        return (f"**{label.capitalize()} per meal:**\n" +
-                "\n".join(f"- {r['meal']}: {r[nut]}{unit}" for _,r in rows.iterrows())), None, []
+                           for i,(_,r) in enumerate(df.iterrows()))), None, []
     else:
-        return ("I did not understand that. Try:\n"
-                "- *How many calories am I eating?*\n"
-                "- *What is the healthiest meal?*\n"
-                "- *Why is the burger bad?*\n"
-                "- *Compare chicken vs burger*\n"
-                "- *How much protein does each meal have?*\n"
-                "- *How can I improve the oatmeal?*"), None, []
+        if meals:
+            r = df[df["meal"]==meals[0]].iloc[0]
+            return (f"**{r['meal']}** — Score: {r['score']}/100 | "
+                    f"{r['calories_kcal']:.0f} kcal | Protein: {r['protein_g']}g | "
+                    f"Fibre: {r['fiber_g']}g | Sat.fat: {r['sat_fat_g']}g"), None, []
+        return ("I can answer: meal scores, best/worst meals, comparisons, "
+                "calories, macros, why a meal scores low, how to improve it."), None, []
 
-# ─── Layout ───────────────────────────────────────────────────────────────────
-st.title("🥗 NLP Meal Assistant")
-st.caption("Ask any question about meals in plain English — powered by keyword NLP + USDA nutrition data.")
+# ─── App layout ───────────────────────────────────────────────────────────────
+st.title("🥗 Meal NLP Assistant")
+st.caption("Ask anything about your meals — powered by real nutrition data")
 
-col1, col2 = st.columns([1.2, 2], gap="large")
+tab1, tab2, tab3 = st.tabs(["📊 Meal Overview", "💬 Ask the Assistant", "📅 Daily Tracker"])
 
-with col1:
-    st.subheader("📊 Meal Scores")
-    colours_map = {"🔴 Poor":"#f04438","🟡 Okay":"#ffd400","🟢 Good":"#8DE5A1","🌟 Excellent":"#17b26a"}
-    fig, ax = plt.subplots(figsize=(5,4))
-    fig.patch.set_facecolor("#1D1D20")
-    ax.set_facecolor("#1D1D20")
-    short = [m.split("+")[0].strip() for m in meal_scores["meal"]]
-    bar_colours = [colours_map.get(b,"#A1C9F4") for b in meal_scores["band"]]
-    bars = ax.barh(short, meal_scores["score"], color=bar_colours, height=0.55)
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Score / 100", color="#909094", fontsize=9)
-    ax.tick_params(colors="#fbfbff", labelsize=8)
-    for spine in ax.spines.values(): spine.set_visible(False)
-    for bar_, score in zip(bars, meal_scores["score"]):
-        ax.text(bar_.get_width()+1, bar_.get_y()+bar_.get_height()/2,
-                f"{score}", va="center", color="#fbfbff", fontsize=8)
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+# ══ TAB 1: Overview ══════════════════════════════════════════════════════════
+with tab1:
+    col_left, col_right = st.columns([1, 1])
+    with col_left:
+        st.subheader("Meal Quality Scores")
+        df_plot = meal_scores.sort_values("score", ascending=True)
+        short_labels = [m.replace(" + ", "\n+ ") for m in df_plot["meal"]]
+        score_colours = ["#f04438" if s < 25 else "#ffd400" if s < 50
+                         else "#17b26a" if s < 75 else "#A1C9F4"
+                         for s in df_plot["score"]]
+        fig_scores, ax = plt.subplots(figsize=(6, 4))
+        fig_scores.patch.set_facecolor("#1D1D20")
+        ax.set_facecolor("#1D1D20")
+        bars = ax.barh(range(len(df_plot)), df_plot["score"], color=score_colours, height=0.55)
+        ax.set_yticks(range(len(df_plot)))
+        ax.set_yticklabels([m.split("+")[0].strip() for m in df_plot["meal"]],
+                           color="#fbfbff", fontsize=9)
+        for bar_, score in zip(bars, df_plot["score"]):
+            ax.text(bar_.get_width()+0.5, bar_.get_y()+bar_.get_height()/2,
+                    f"{score}", va="center", color="#fbfbff", fontsize=8.5)
+        ax.set_xlim(0, 115); ax.set_xlabel("Score / 100", color="#909094", fontsize=9)
+        ax.tick_params(colors="#fbfbff")
+        for spine in ax.spines.values(): spine.set_visible(False)
+        plt.tight_layout()
+        st.pyplot(fig_scores)
+        plt.close(fig_scores)
 
-    st.subheader("🔬 Macro Breakdown")
-    macro_cols = ["protein_g","fiber_g","sat_fat_g","calories_kcal"]
-    display_df = meal_scores[["meal","score"]+macro_cols].copy()
-    display_df.columns = ["Meal","Score","Protein(g)","Fibre(g)","Sat.Fat(g)","Calories(kcal)"]
-    display_df["Meal"] = display_df["Meal"].str.replace(r"^\S+ ", "", regex=True)
-    st.dataframe(display_df.set_index("Meal"), use_container_width=True)
+    with col_right:
+        st.subheader("Macro Breakdown")
+        display_cols = ["meal","calories_kcal","protein_g","fiber_g","sat_fat_g","carbs_g"]
+        display_df = meal_scores[display_cols].rename(columns={
+            "meal":"Meal","calories_kcal":"Kcal","protein_g":"Protein (g)",
+            "fiber_g":"Fibre (g)","sat_fat_g":"Sat.Fat (g)","carbs_g":"Carbs (g)"})
+        display_df["Meal"] = display_df["Meal"].str.replace(r"^[^\w]+","",regex=True)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-with col2:
-    st.subheader("💬 Ask the NLP Assistant")
+# ══ TAB 2: NLP Assistant ═════════════════════════════════════════════════════
+with tab2:
+    col_q, col_a = st.columns([1, 1])
+    with col_q:
+        st.subheader("💬 Ask a question")
+        example_qs = [
+            "What is the healthiest meal?",
+            "Why is the burger bad?",
+            "How much protein does each meal have?",
+            "Compare chicken vs oatmeal",
+            "How many calories am I eating?",
+            "How can I improve the bread meal?",
+            "Which meal has the most fibre?",
+            "What are the worst meals to eat?",
+        ]
+        chosen = st.selectbox("Pick an example:", ["— type your own below —"] + example_qs)
+        user_q = st.text_input("Or type your question:", value="" if chosen.startswith("—") else chosen)
+        if st.button("Ask 🤖", key="ask_btn") and user_q.strip():
+            st.session_state["last_answer"] = ask(user_q.strip())
 
-    EXAMPLES = [
-        "How many calories am I eating?",
-        "How many calories does the burger have?",
-        "What is the healthiest meal?",
-        "What is the worst meal?",
-        "Compare chicken vs burger",
-        "How much protein does each meal have?",
-        "Which meal has the most fibre?",
-        "Why is the burger bad?",
-        "How can I improve the oatmeal?",
-        "What meals are available?",
-    ]
-    selected = st.selectbox("💡 Try an example question:", ["(type your own below)"] + EXAMPLES)
+    with col_a:
+        st.subheader("🤖 Answer")
+        if "last_answer" in st.session_state:
+            ans_text, ans_type, ans_meals = st.session_state["last_answer"]
+            st.markdown(ans_text)
+            if ans_type == "calorie":
+                render_calorie_visual(ans_meals)
 
-    user_input = st.text_input(
-        "Or type your own question:",
-        value="" if selected == "(type your own below)" else selected,
-        placeholder="e.g. how many calories am I eating today?",
-        key="user_query"
-    )
-
-    if user_input.strip():
-        result = ask(user_input.strip())
-        answer_text, vis_type, vis_meals = result
-
-        st.markdown("---")
-        st.markdown("**🤖 Assistant:**")
-        st.markdown(answer_text)
-
-        # ── Live calorie visual ──────────────────────────────────────────────
-        if vis_type == "calorie":
-            st.markdown("#### 🔥 Calorie Gauge")
-            st.caption(f"Target line = {CALORIE_TARGET} kcal per meal  •  🟢 under  🟡 near  🔴 over")
-            render_calorie_visual(vis_meals)
-
-    # ── Meal detail cards ────────────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("📋 Meal Details")
+    st.divider()
+    st.subheader("📋 All meals at a glance")
     for _, row in meal_scores.iterrows():
-        with st.expander(f"{row['meal']}  ·  {row['band']}  ·  {row['score']}/100"):
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("Calories", f"{row['calories_kcal']:.0f} kcal")
-            c2.metric("Protein",  f"{row['protein_g']}g")
-            c3.metric("Fibre",    f"{row['fiber_g']}g")
-            c4.metric("Sat.Fat",  f"{row['sat_fat_g']}g")
-            c5.metric("Carbs",    f"{row['carbs_g']}g")
+        with st.expander(f"{row['meal']}  —  {row['band']}  ({row['score']}/100)"):
+            m1,m2,m3,m4,m5 = st.columns(5)
+            m1.metric("Calories", f"{row['calories_kcal']:.0f} kcal")
+            m2.metric("Protein",  f"{row['protein_g']}g")
+            m3.metric("Fibre",    f"{row['fiber_g']}g")
+            m4.metric("Sat.Fat",  f"{row['sat_fat_g']}g")
+            m5.metric("Carbs",    f"{row['carbs_g']}g")
+
+# ══ TAB 3: Daily Tracker ═════════════════════════════════════════════════════
+with tab3:
+    st.subheader("📅 Daily Calorie Tracker")
+    st.caption(f"Select what you ate at each meal slot — tracks against your {DAILY_TARGET} kcal daily goal")
+
+    slots = ["Breakfast", "Lunch", "Dinner", "Snack"]
+    slot_defaults = {
+        "Breakfast": "🥣 Oatmeal + Banana + Milk",
+        "Lunch":     "🍗 Grilled Chicken + Rice + Broccoli",
+        "Dinner":    None,
+        "Snack":     None,
+    }
+    SLOT_ICONS = {"Breakfast":"🌅","Lunch":"☀️","Dinner":"🌙","Snack":"🍎"}
+
+    sel_cols = st.columns(4)
+    slot_meals = {}
+    for i, slot in enumerate(slots):
+        with sel_cols[i]:
+            options = ["— skip —"] + MEAL_NAMES
+            default_idx = (MEAL_NAMES.index(slot_defaults[slot]) + 1
+                           if slot_defaults[slot] else 0)
+            chosen_meal = st.selectbox(
+                f"{SLOT_ICONS[slot]} {slot}",
+                options,
+                index=default_idx,
+                key=f"slot_{slot}"
+            )
+            slot_meals[slot] = None if chosen_meal == "— skip —" else chosen_meal
+
+    st.divider()
+    render_daily_tracker(slot_meals)
+
+    # ── Per-slot breakdown ────────────────────────────────────────────────────
+    active = {s: m for s, m in slot_meals.items() if m}
+    if active:
+        st.subheader("Per-slot details")
+        for slot, meal in active.items():
+            macros = get_macros(meal)
+            with st.expander(f"{SLOT_ICONS[slot]} {slot}: {meal}  ({macros['calories_kcal']:.0f} kcal)"):
+                d1,d2,d3,d4 = st.columns(4)
+                d1.metric("Calories", f"{macros['calories_kcal']:.0f} kcal")
+                d2.metric("Protein",  f"{macros['protein_g']:.1f}g")
+                d3.metric("Fibre",    f"{macros['fiber_g']:.1f}g")
+                d4.metric("Sat.Fat",  f"{macros['sat_fat_g']:.1f}g")
